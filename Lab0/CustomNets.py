@@ -1,14 +1,15 @@
 from Utils import *
 from Model import Model
-import numpy as np
 import random
-from tensorflow.keras.utils import to_categorical
 from Plotter import Plotter
+from Optimizers import *
 
 
 class NeuralNetwork(Model):
-    def __init__(self, input_size: int, output_size: int, neurons_per_layer: list[int], lr=0.1, activation='sigmoid'):
+    def __init__(self, input_size: int, output_size: int, neurons_per_layer: list[int],
+                 lr=0.1, optimizer='adam', activation='relu', optimizer_params=None, name=''):
         super(NeuralNetwork, self).__init__(input_size, output_size)
+        self.name = name
         self.lr = lr
 
         self.weights = []
@@ -22,6 +23,7 @@ class NeuralNetwork(Model):
         self.node_inputs = []
         self.node_outputs = []
 
+        self.activation_name = activation
         if activation == 'relu':
             self.activation = relu
             self.activation_ = relu_
@@ -29,16 +31,23 @@ class NeuralNetwork(Model):
             self.activation = sigmoid
             self.activation_ = sigmoid_
 
+        if optimizer_params is None:
+            optimizer_params = OptimizerParams()
+        if optimizer == 'sgd':
+            self.optimizer = SGD(self.weights, self.biases, lr=optimizer_params.lr)
+        elif optimizer == 'adam':
+            self.optimizer = Adam(self.weights, self.biases,
+                                  lr=optimizer_params.lr, beta1=optimizer_params.beta1, beta2=optimizer_params.beta2)
+
     # Training with backpropagation.
     def train(self, x_train, y_train, epochs=3000, use_minibatch=False, mbs=200) -> Model:
         y_original = y_train
-        y_train = to_categorical(y_train)
-
-        plotter = Plotter(f'custom_net')
 
         m = x_train.shape[0]
         if not use_minibatch:
             mbs = m
+
+        plotter = Plotter(f'({self.name})custom_net_{self.activation_name}_{self.optimizer}_mbs{mbs}_eps{epochs}')
         for epoch in range(epochs):
             print(f'epoch {epoch}')
             if use_minibatch:
@@ -49,13 +58,11 @@ class NeuralNetwork(Model):
                 x_batch = x_train
                 y_batch = y_train
             self.forward(x_batch)
-            w_grads, b_grads = self.backward(y_batch)
-            self.weights = [w - self.lr * dw / mbs for w, dw in zip(self.weights, w_grads)]
-            self.biases = [b - self.lr * db / mbs for b, db in zip(self.biases, b_grads)]
-            accuracy = eval_accuracy(y_original, self.forward(x_train))
-            print(f'accuracy: {accuracy * 100}%')
+            grads = self.backward(y_batch)
+            self.weights, self.biases = self.optimizer.update(*grads, mbs)
+            accuracy = eval_results((0, y_original), self.forward(x_train), self.output_size)
             plotter.add_data(epoch, accuracy)
-        plotter.save('test.png')
+        plotter.save()
         return self
 
     # Forward pass.
@@ -87,8 +94,9 @@ class NeuralNetwork(Model):
 
 
 class NeuralNetwork2(Model):
-    def __init__(self, input_size: int, output_size: int, neurons_per_layer: int, lr=0.1):
+    def __init__(self, input_size: int, output_size: int, neurons_per_layer: int, lr=0.1, name=''):
         super(NeuralNetwork2, self).__init__(input_size, output_size)
+        self.name = name
         self.neurons_per_layer = neurons_per_layer
         self.lr = lr
         self.W1 = np.random.randn(self.input_size, self.neurons_per_layer)
@@ -104,14 +112,11 @@ class NeuralNetwork2(Model):
     # Training with backpropagation.
     def train(self, x_train, y_train, epochs=3000, use_minibatch=False, mbs=200) -> Model:
         y_original = y_train
-        y_train = to_categorical(y_train, NUM_CLASSES)
-
-        plotter = Plotter(f'custom_net2')
 
         if not use_minibatch:
             mbs = x_train.shape[0]
-
         m = x_train.shape[0]
+        plotter = Plotter(f'({self.name})custom_net2_relu_{mbs}_eps{epochs}')
         for epoch in range(epochs):
             print(f'epoch {epoch}')
             if use_minibatch:
@@ -127,16 +132,15 @@ class NeuralNetwork2(Model):
             self.W2 -= self.lr * dw2 / mbs
             self.b1 -= self.lr * db1 / mbs
             self.b2 -= self.lr * db2 / mbs
-            accuracy = eval_accuracy(y_original, self.forward(x_train))
-            print(f'accuracy: {accuracy * 100}%')
+            accuracy = eval_results((0, y_original), self.forward(x_train), self.output_size)
             plotter.add_data(epoch, accuracy)
-        plotter.save('test.png')
+        plotter.save()
         return self
 
     # Forward pass.
     def forward(self, x):
         self.z1 = x @ self.W1 + self.b1
-        self.a1 = sigmoid(self.z1)
+        self.a1 = relu(self.z1)
         self.z2 = self.a1 @ self.W2 + self.b2
         self.pred = sigmoid(self.z2)
         return self.pred
@@ -144,7 +148,7 @@ class NeuralNetwork2(Model):
     def backward(self, x, y):
         delta2 = self.loss_derivative(y) * sigmoid_(self.z2)
         dw2 = self.a1.T @ delta2
-        delta1 = (delta2 @ self.W2.T) * sigmoid_(self.z1)
+        delta1 = (delta2 @ self.W2.T) * relu_(self.z1)
         dw1 = x.T @ delta1
         return [dw1, dw2, sum(delta1), sum(delta2)]
 
